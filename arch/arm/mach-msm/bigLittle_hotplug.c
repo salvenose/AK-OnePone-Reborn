@@ -116,7 +116,7 @@ static int check_down_lock(unsigned int cpu)
 
 extern unsigned int get_rq_info(void);
 
-unsigned int state = MSM_MPDEC_DISABLED;
+unsigned int biglittle_state = MSM_MPDEC_DISABLED;
 
 static int get_slowest_cpu(void) {
 	unsigned int cpu, slow_cpu = 0, rate, slow_rate = 0;
@@ -213,8 +213,8 @@ static void __ref bigLittle_hotplug_work(struct work_struct *work) {
 	if (!mutex_trylock(&hotplug.bigLittle_cpu_mutex))
 		goto out;
 
-	state = mp_decision();
-	switch (state) {
+	biglittle_state = mp_decision();
+	switch (biglittle_state) {
 	case MSM_MPDEC_DISABLED:
 	case MSM_MPDEC_IDLE:
 		break;
@@ -237,7 +237,7 @@ static void __ref bigLittle_hotplug_work(struct work_struct *work) {
 		break;
 	default:
 		pr_err(MPDEC_TAG": %s: invalid mpdec hotplug state %d\n",
-			__func__, state);
+			__func__, biglittle_state);
 	}
 	mutex_unlock(&hotplug.bigLittle_cpu_mutex);
 
@@ -663,11 +663,11 @@ static ssize_t store_bigLittle_enabled(struct device *dev,
 	hotplug.bigLittle_enabled = input;
 
 	if (!hotplug.bigLittle_enabled) {
-		state = MSM_MPDEC_DISABLED;
+		biglittle_state = MSM_MPDEC_DISABLED;
 		bigLittle_hotplug_stop();
 		pr_info(MPDEC_TAG": Disabled\n");
 	} else {
-		state = MSM_MPDEC_IDLE;
+		biglittle_state = MSM_MPDEC_IDLE;
 		bigLittle_hotplug_start();
 		pr_info(MPDEC_TAG": Enabled\n");
 	}
@@ -778,7 +778,7 @@ static struct platform_driver bigLittle_hotplug_driver = {
 	},
 };
 
-static int __init msm_mpdec_init(void)
+static int __init biglittle_mpdec_init(void)
 {
 	int ret = 0;
 
@@ -799,14 +799,14 @@ static int __init msm_mpdec_init(void)
 	return ret;
 }
 
-void msm_mpdec_exit(void)
+void biglittle_mpdec_exit(void)
 {
 	platform_device_unregister(&bigLittle_hotplug_device);
 	platform_driver_unregister(&bigLittle_hotplug_driver);
 }
 
-late_initcall(msm_mpdec_init);
-module_exit(msm_mpdec_exit);
+late_initcall(biglittle_mpdec_init);
+module_exit(biglittle_mpdec_exit);
 
 MODULE_AUTHOR("Pranav Vashi <neobuddy89@gmail.com>");
 MODULE_DESCRIPTION("BigLittle Hotplug Driver");
