@@ -3040,6 +3040,16 @@ config BRICKED_HOTPLUG
 	  This enables kernel based multi core control.
 	  (up/down hotplug based on load)
 
+config BIGLITTLE_HOTPLUG
+        bool "Enable kernel based mpdecision"
+        depends on MSM_RUN_QUEUE_STATS
+        default y
+        help
+          This enables a multi-core processor that can adjust better
+	  to dynamic computing needs and use less power than clock
+	  scaling alone.
+          (up/down hotplug based on load)
+
 config KRAIT_REGULATOR
 	bool "Support Kraits powered via ganged regulators in the pmic"
 	help

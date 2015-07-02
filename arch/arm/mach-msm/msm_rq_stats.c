@@ -259,7 +259,7 @@ static struct kobj_attribute hotplug_enabled_attr =
 	__ATTR(hotplug_enable, S_IWUSR | S_IRUSR, show_hotplug_enable,
 	       store_hotplug_enable);
 
-#ifdef CONFIG_BRICKED_HOTPLUG
+#if defined(CONFIG_BRICKED_HOTPLUG) || defined(CONFIG_BIGLITTLE_HOTPLUG)
 unsigned int get_rq_info(void)
 {
 	unsigned long flags = 0;
