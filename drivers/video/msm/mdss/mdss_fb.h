@@ -185,6 +185,10 @@ struct msm_fb_data_type {
 
 	u32 dest;
 	struct fb_info *fbi;
+	
+    int c_continue;
+    int last_event;
+    int c_skip;
 
 	int idle_time;
 	struct delayed_work idle_notify_work;

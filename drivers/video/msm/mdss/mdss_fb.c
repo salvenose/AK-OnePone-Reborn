@@ -342,6 +342,44 @@ extern int mdss_dsi_panel_set_gamma_index(struct mdss_panel_data *panel_data, in
 extern int mdss_dsi_panel_set_sre(struct mdss_panel_data *panel_data, bool enable);
 extern int mdss_dsi_panel_set_color_enhance(struct mdss_panel_data *panel_data, bool enable);
 
+/* Returns whether constant refresh hack is active */
+static ssize_t mdss_get_refresh(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+    struct fb_info *fbi = dev_get_drvdata(dev);  
+    struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)fbi->par;
+    
+    return sprintf(buf, "%d\n", mfd->c_continue);
+}
+
+/* Sets whether constant refresh hack is active */
+static ssize_t mdss_set_refresh(struct device *dev,
+							   struct device_attribute *attr,
+							   const char *buf, size_t count)
+{
+    int value = 0;
+    struct fb_info *fbi = dev_get_drvdata(dev);  
+    struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)fbi->par;
+    
+    sscanf(buf, "%du", &value);
+    
+    if (value > 1 || value < 0) {
+        return -EINVAL;
+    }
+    
+    mfd->c_continue = value;
+    
+    if (value == 1) {
+        atomic_inc(&mfd->mdp_sync_pt_data.commit_cnt);
+        atomic_inc(&mfd->commits_pending);
+        atomic_inc(&mfd->kickoff_pending);
+        wake_up_all(&mfd->commit_wait_q);
+        mutex_unlock(&mfd->mdp_sync_pt_data.sync_mutex);
+    }
+    
+    return count;
+}
+
 static ssize_t mdss_get_cabc(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -520,6 +558,7 @@ static DEVICE_ATTR(gamma, S_IRUGO | S_IWUSR | S_IWGRP, mdss_get_gamma_index, mds
 static DEVICE_ATTR(sre, S_IRUGO | S_IWUSR | S_IWGRP, mdss_get_sre, mdss_set_sre);
 static DEVICE_ATTR(color_enhance, S_IRUGO | S_IWUSR | S_IWGRP, mdss_get_color_enhance, mdss_set_color_enhance);
 static DEVICE_ATTR(rgb, S_IRUGO | S_IWUSR | S_IWGRP, mdss_get_rgb, mdss_set_rgb);
+static DEVICE_ATTR(refresh, S_IRUGO | S_IWUSR | S_IWGRP, mdss_get_refresh, mdss_set_refresh);
 
 extern int mdss_dsi_panel_get_panel_calibration(
 	struct mdss_panel_data *pdata, char *buf);
@@ -775,6 +814,7 @@ static struct attribute *mdss_fb_attrs[] = {
     &dev_attr_panel_calibration.attr,
 #endif
 	&dev_attr_rgb.attr,
+	&dev_attr_refresh.attr,
 	NULL,
 };
 
@@ -1007,7 +1047,29 @@ static int mdss_fb_send_panel_event(struct msm_fb_data_type *mfd,
 		return -ENODEV;
 	}
 
-	pr_debug("sending event=%d for fb%d\n", event, mfd->index);
+	//pr_debug("sending event=%d for fb%d\n", event, mfd->index);
+	/*Always print this out for debugging purposes */
+	printk("MDSS_FB: sending event=%d for fb%d\n", event, mfd->index);
+ 	
+ 	/*Constant refresh hack auto on
+ 	 TODO: Disable if android or only enable for Xorg */  
+ 	//if (event ==7 || event == 8) {   
+ 	if (mfd->last_event == 7 && event == 8) {
+ 	    printk("MDSS_FB: Doing  what needs to be done\n");
+ 	    mfd->c_continue = 1;
+ 	    atomic_inc(&mfd->mdp_sync_pt_data.commit_cnt);
+        atomic_inc(&mfd->commits_pending);
+        atomic_inc(&mfd->kickoff_pending);
+        wake_up_all(&mfd->commit_wait_q);
+        mutex_unlock(&mfd->mdp_sync_pt_data.sync_mutex);
+ 	} else if (mfd->last_event == 8 && event == 7) {
+ 	    mfd->c_skip = 1;
+ 	} else {
+ 	    printk("MDSS_FB: Stop that\n");
+ 	    mfd->c_continue = 0;
+ 	}
+ 	
+ 	mfd->last_event = event;
 
 	if (pdata->event_handler)
 		return pdata->event_handler(pdata, event, arg);
@@ -1800,6 +1862,14 @@ static struct fb_ops mdss_fb_ops = {
 	.fb_pan_display = mdss_fb_pan_display,	/* pan display */
 	.fb_ioctl = mdss_fb_ioctl,	/* perform fb specific ioctl */
 	.fb_mmap = mdss_fb_mmap,
+	/* Enable old framebuffer operations
+	 TODO: Replace fillrect/copyarea/imageblit with proper
+	       functions from file drivers/video/msm/msm_fb.c */
+	.fb_read        = fb_sys_read,
+ 	.fb_write       = fb_sys_write,
+ 	.fb_fillrect	= sys_fillrect,
+ 	.fb_copyarea	= sys_copyarea,
+ 	.fb_imageblit	= sys_imageblit,
 };
 
 static int mdss_fb_alloc_fbmem_iommu(struct msm_fb_data_type *mfd, int dom)
@@ -2224,6 +2294,10 @@ static int mdss_fb_open(struct fb_info *info, int user)
 		list_add(&pinfo->list, &mfd->proc_list);
 		INIT_LIST_HEAD(&pinfo->file_list);
 		pr_debug("new process entry pid=%d\n", pinfo->pid);
+		/*Initialize to 0 */
+		mfd->c_continue = 0;
+		mfd->last_event = 0;
+		mfd->c_skip = 0;
 	}
 
 	file_info->file = info->file;
@@ -2643,9 +2717,14 @@ static int mdss_fb_pan_idle(struct msm_fb_data_type *mfd)
 			 mfd->shutdown_pending),
 			msecs_to_jiffies(WAIT_DISP_OP_TIMEOUT));
 	if (!ret) {
-		pr_err("wait for idle timeout %d pending=%d\n",
+		printk("MDSS_FB: wait for idle timeout %d pending=%d\n",
 				ret, atomic_read(&mfd->commits_pending));
-
+        if (!mfd->c_skip) {
+		    printk("MDSS_FB: Stop that\n");
+            mfd->c_continue = 0;
+        } else {
+            mfd->c_skip = 0;
+        }
 		mdss_fb_signal_timeline(&mfd->mdp_sync_pt_data);
 	} else if (mfd->shutdown_pending) {
 		pr_debug("Shutdown signalled\n");
@@ -2800,11 +2879,17 @@ static int __mdss_fb_perform_commit(struct msm_fb_data_type *mfd)
 	struct msm_sync_pt_data *sync_pt_data = &mfd->mdp_sync_pt_data;
 	struct msm_fb_backup_type *fb_backup = &mfd->msm_fb_backup;
 	int ret = -ENOSYS;
+	
+	/* Set commit count to 1000 and reset it to 1000 everytime it reaches zero
+     * IF hack is set to on = 1 */
+    if (mfd->c_continue == 1 && atomic_read(&mfd->mdp_sync_pt_data.commit_cnt) == 0) {
+         atomic_set(&mfd->mdp_sync_pt_data.commit_cnt, 1000);
+ 	}
 
 	if (!sync_pt_data->async_wait_fences)
 		mdss_fb_wait_for_fence(sync_pt_data);
 	sync_pt_data->flushed = false;
-
+    
 	if (fb_backup->disp_commit.flags & MDP_DISPLAY_COMMIT_OVERLAY) {
 		if (mfd->mdp.kickoff_fnc)
 			ret = mfd->mdp.kickoff_fnc(mfd,
@@ -2816,7 +2901,7 @@ static int __mdss_fb_perform_commit(struct msm_fb_data_type *mfd)
 		ret = mdss_fb_pan_display_sub(&fb_backup->disp_commit.var,
 				&fb_backup->info);
 		if (ret)
-			pr_err("pan display failed %x on fb%d\n", ret,
+			pr_warn("pan display failed %x on fb%d\n", ret,
 					mfd->index);
 	}
 	if (!ret)
@@ -2855,7 +2940,10 @@ static int __mdss_fb_display_thread(void *data)
 			break;
 
 		ret = __mdss_fb_perform_commit(mfd);
-		atomic_dec(&mfd->commits_pending);
+		/*If hack is active, never reduce commits pending counter
+		 *In other words, only reduce counter if hack is NOT active*/
+        if (!mfd->c_continue)
+ 		    atomic_dec(&mfd->commits_pending);
 		wake_up_all(&mfd->idle_wait_q);
 	}
 

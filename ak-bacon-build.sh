@@ -123,6 +123,33 @@ while read -p "Do you want to build kernel (y/n)? " dchoice
 do
 case "$dchoice" in
 	y|Y)
+	    while read -p "[1] Default [2] NoDefconfig [3] [NoReconf]  (1/2/3)? " bchoice
+        do
+            case $bchoice in
+                1)
+                    make_kernel
+                    break
+                    ;;
+		        2)
+		            make menuconfig
+		            make $THREAD
+		            cp -vr $ZIMAGE_DIR/$KERNEL $REPACK_DIR
+		            break
+		            ;;
+		        3)
+                    make $THREAD
+		            cp -vr $ZIMAGE_DIR/$KERNEL $REPACK_DIR
+		            break
+		            ;;
+		        *)
+		            echo
+		            echo "Invalid try again!"
+		            echo
+		            ;;
+		    esac
+		done
+        
+        
 		make_kernel
 		make_dtb
 		make_modules
